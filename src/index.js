@@ -179,46 +179,6 @@ app.get("/api/ciphers", authenticateToken, async (req, res) => {
   }
 });
 
-// Update a Cipher
-app.put("/api/ciphers/:id", authenticateToken, async (req, res) => {
-  const userId = req.user.user_id;
-  const cipherId = req.params.id;
-  const { vigenere_table_shifts, password_word } = req.body;
-
-  try {
-    // Check if user has permission to edit
-    const [ciphers] = await db.query(
-      `SELECT C.* FROM Ciphers C
-       LEFT JOIN Shared_Ciphers SC ON C.Cipher_ID = SC.Cipher_ID
-       WHERE C.Cipher_ID = ? AND (C.User_ID = ? OR (SC.Shared_User_ID = ? AND SC.Can_Edit = TRUE))`,
-      [cipherId, userId, userId]
-    );
-
-    if (ciphers.length === 0) {
-      return res
-        .status(403)
-        .send("You don't have permission to edit this cipher");
-    }
-
-    // Update the cipher
-    await db.query(
-      "UPDATE Ciphers SET Vigenere_Table_Shifts = ?, Password_Word = ? WHERE Cipher_ID = ?",
-      [vigenere_table_shifts, password_word, cipherId]
-    );
-
-    // Log the action
-    await db.query(
-      "INSERT INTO Logs (Cipher_ID, User_ID, Action) VALUES (?, ?, 'UPDATE')",
-      [cipherId, userId]
-    );
-
-    res.send("Cipher updated successfully");
-  } catch (err) {
-    console.error(err);
-    res.status(500).send(err.message);
-  }
-});
-
 // Delete or Unshare a Cipher
 app.delete("/api/ciphers", authenticateToken, async (req, res) => {
   const { name } = req.body;
@@ -244,15 +204,13 @@ app.delete("/api/ciphers", authenticateToken, async (req, res) => {
     const cipherOwnerId = cipher.User_ID;
 
     if (cipherOwnerId === userId) {
-      // The user is the owner, proceed to delete the cipher and related data
       try {
-        // Delete from Logs
         await db.query("DELETE FROM Logs WHERE Cipher_ID = ?", [cipherId]);
-        // Delete from Shared_Ciphers
+
         await db.query("DELETE FROM Shared_Ciphers WHERE Cipher_ID = ?", [
           cipherId,
         ]);
-        // Delete the cipher itself
+
         const [result] = await db.query(
           "DELETE FROM Ciphers WHERE Cipher_ID = ?",
           [cipherId]
@@ -270,7 +228,6 @@ app.delete("/api/ciphers", authenticateToken, async (req, res) => {
         res.status(500).json({ error: "Failed to delete cipher" });
       }
     } else {
-      // The user is not the owner, check if the cipher is shared with the user
       const [sharedRows] = await db.query(
         "SELECT * FROM Shared_Ciphers WHERE Cipher_ID = ? AND Shared_User_ID = ?",
         [cipherId, userId]
@@ -478,4 +435,35 @@ app.get("/api/logs", authenticateToken, async (req, res) => {
 
 app.listen(process.env.PORT || 5000, () => {
   console.log(`Server is running on port ${process.env.PORT || 5000}`);
+});
+
+app.put("/api/users/:id/admin", authenticateToken, async (req, res) => {
+  if (!req.user.is_admin) {
+    return res.sendStatus(403); // Forbidden
+  }
+
+  const userIdToUpdate = parseInt(req.params.id);
+  const { is_admin } = req.body;
+
+  if (typeof is_admin !== "boolean") {
+    return res.status(400).json({ error: "is_admin must be a boolean" });
+  }
+
+  try {
+    const [result] = await db.query(
+      "UPDATE Users SET Is_Admin = ? WHERE User_ID = ?",
+      [is_admin, userIdToUpdate]
+    );
+
+    if (result.affectedRows === 0) {
+      return res
+        .status(404)
+        .json({ error: "User not found or cannot be updated" });
+    }
+
+    res.json({ message: "User admin status updated successfully" });
+  } catch (err) {
+    console.error("Error updating user admin status:", err);
+    res.status(500).json({ error: "Failed to update user admin status" });
+  }
 });
